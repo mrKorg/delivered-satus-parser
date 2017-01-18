@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<config>
+    <modules>
+        <Voga_DeliveredStatus>
+            <active>true</active>
+            <codePool>local</codePool>
+            <depends>
+                <Voga_Warehouse/>
+                <Voga_Aramex/>
+            </depends>
+        </Voga_DeliveredStatus>
+    </modules>
+</config>
