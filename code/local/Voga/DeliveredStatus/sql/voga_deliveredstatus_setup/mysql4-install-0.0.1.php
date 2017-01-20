@@ -19,7 +19,7 @@ if (count($rows) == 0) {
             'label'
         ),
         array(
-            array('status' => 'delivered', 'label' => 'Delivered'),
+            array('status' => Voga_DeliveredStatus_Model_Sales_Order::STATUS_DELIVERED, 'label' => 'Delivered'),
         )
     );
 

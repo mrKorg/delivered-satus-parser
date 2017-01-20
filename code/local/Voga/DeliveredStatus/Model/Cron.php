@@ -7,6 +7,7 @@ class Voga_DeliveredStatus_Model_Cron
     const EMAIL_SENDER   = 'voga_deliveredstatus/deliveredstatus_group/email_field';
     const EMAIL_TEMPLATE = 'voga_deliveredstatus/deliveredstatus_group/email_template';
     const EMAIL_ADDRESS  = 'voga_deliveredstatus/deliveredstatus_group/email_address';
+    const DELIVERED_LOG  = 'delivered_status.log';
 
     protected $pathToXml;
     protected $pathToXmlArchive;
@@ -15,6 +16,7 @@ class Voga_DeliveredStatus_Model_Cron
     {
         $this->pathToXml        = Mage::getBaseDir('var') . DS .'aramex' . DS . 'raw_data' . DS;
         $this->pathToXmlArchive = Mage::getBaseDir('var') . DS .'aramex' . DS . 'raw_data_archive' . DS;
+        $this->pathToXmlErrors = Mage::getBaseDir('var') . DS .'aramex' . DS . 'raw_data_errors' . DS;
     }
 
     protected function _getPathToXml($file = NULL)
@@ -36,7 +38,7 @@ class Voga_DeliveredStatus_Model_Cron
         $deliveredHawbNumbers = $this->_getDeliveredHawbNumbers($files);
         $realHawbNumbers = $this->_setDeliveredStatus($deliveredHawbNumbers);
         $this->_moveXmlFiles($files);
-        $this->_diffHawbNumbers($deliveredHawbNumbers, $realHawbNumbers);
+        $this->_diffHawbNumbers(array_keys($deliveredHawbNumbers), $realHawbNumbers);
     }
 
     /**
@@ -44,55 +46,58 @@ class Voga_DeliveredStatus_Model_Cron
      */
     protected function _setDeliveredStatus($deliveredHawbNumbers)
     {
-        $orderCollection = Mage::getModel('sales/order')
-            ->getCollection()
-            ->addAttributeToSelect('entity_id')
-            ->addAttributeToSelect('status')
-            ->addAttributeToSelect('state')
-            ->addAttributeToSelect('hawb_number')
-            ->addFieldToFilter('hawb_number', array('in'=>$deliveredHawbNumbers));
-
         $realHawbNumbers = array();
+        $numbers = array_keys($deliveredHawbNumbers);
 
-        foreach ($orderCollection as $order) {
+        if (count($deliveredHawbNumbers)) {
+            $orderCollection = Mage::getModel('sales/order')
+                ->getCollection()
+                ->addAttributeToSelect('entity_id')
+                ->addAttributeToSelect('status')
+                ->addAttributeToSelect('state')
+                ->addAttributeToSelect('hawb_number')
+                ->addFieldToFilter('hawb_number', array('in'=>$numbers));
 
-            $realHawbNumbers[] = $order->getHawbNumber();
+            foreach ($orderCollection as $order) {
 
-            if ( $order->getState() == Mage_Sales_Model_Order::STATE_COMPLETE ) {
+                $orderHuwNumber = $order->getHawbNumber();
+                $realHawbNumbers[] = $orderHuwNumber;
+                $orderId = $order->getId();
 
                 try {
-                    $order->setStatus( Voga_Warehouse_Helper_Data::ITEM_DELIVERED_STATUS );
-                    $comment = 'Order was set to Delivered by our automation tool.';
-                    $history = $order->addStatusHistoryComment($comment, false);
-                    $history->setIsCustomerNotified($isCustomerNotified);
-                    $order->save();
+                    if ( $order->getState() == Mage_Sales_Model_Order::STATE_COMPLETE || $order->getState() == Mage_Sales_Model_Order::STATE_PROCESSING ) {
+                        $order->setStatus( Voga_DeliveredStatus_Model_Sales_Order::STATUS_DELIVERED );
+                        $comment = 'Order was set to Delivered by our automation tool.';
+                        $order->addStatusHistoryComment($comment, false);
+                        $order->save();
 
-                    $orderItemsCollection = Mage::getResourceModel('sales/order_item_collection');
-                    $orderItemsCollection->addAttributeToSelect('item_id')
-                        ->addAttributeToSelect('order_id')
-                        ->addAttributeToSelect('supplier_order_status')
-                        ->addFieldToFilter('order_id', $order->getEntityId());
+                        $orderItemsCollection = Mage::getResourceModel('sales/order_item_collection');
+                        $orderItemsCollection->addAttributeToSelect('item_id')
+                            ->addAttributeToSelect('order_id')
+                            ->addAttributeToSelect('supplier_order_status')
+                            ->addFieldToFilter('order_id', $order->getEntityId());
 
-                    foreach ($orderItemsCollection->getItems() as $item) {
-                        $productId = $item->getProductId();
-                        $product = Mage::getModel('catalog/product')->load($productId);
-                        if ( $product->getStockItem()->getIsInStock() ) {
-                            $item->setSupplierOrderStatus(Voga_Warehouse_Helper_Data::ITEM_DELIVERED_STATUS);
-                            $item->save();
+                        foreach ($orderItemsCollection->getItems() as $item) {
+                            if ( $item->getSupplierOrderStatus() != 'Out of Stock' ) {
+                                $item->setSupplierOrderStatus(Voga_Warehouse_Helper_Data::ITEM_DELIVERED_STATUS);
+                                $item->save();
+                            } else {
+                                Mage::log("Order #{$orderId} has item with status 'Out of Stock'", null, $this::DELIVERED_LOG);
+                            }
                         }
+                        Mage::log("Order #{$orderId} appointed status 'delivered'", null, $this::DELIVERED_LOG);
+                    } else {
+                        throw new Exception("Order #{$orderId} hasn't state 'completed' or 'processing");
                     }
                 } catch (Exception $e) {
-                    Mage::logException($e);
+                    $file = $this->_getPathToXml($deliveredHawbNumbers[$orderHuwNumber]);
+                    $postObject = new Varien_Object();
+                    $postObject->setOrderId($orderId);
+                    $postObject->setExceptionTrace(nl2br($e->getTraceAsString()));
+                    $this->_sendEmail($postObject, $file);
+                    Mage::log($e->getMessage(), null, $this::DELIVERED_LOG);
                 }
-                
-            } else {
-                $id = $order->getId();
-                Mage::log("Order #{$id} hasn't status 'completed'", null, 'delivered_status.log');
-                $postObject = new Varien_Object();
-                $postObject->setOrderId($id);
-                $this->_sendEmail($postObject);
             }
-
         }
 
         return $realHawbNumbers;
@@ -105,21 +110,17 @@ class Voga_DeliveredStatus_Model_Cron
      */
     protected function _getDeliveredHawbNumbers($files)
     {
-        $hawbArray = array();
         $deliveredHawbNumbers = array();
 
         foreach ($files as $file) {
             $xmlPath = $this->_getPathToXml($file);
             if (file_exists($xmlPath) && is_readable($xmlPath)) {
                 $xmlObj = new Varien_Simplexml_Config($xmlPath);
-                $hawbArray[] = $xmlObj->getNode('HAWBUpdate');
-            }
-        }
-
-        foreach ($hawbArray as $hawbItem) {
-            foreach ($hawbItem as $order) {
-                if ( $order->PINumber == $this::PINNUMBER1 || $order->PINumber == $this::PINNUMBER1) {
-                    $deliveredHawbNumbers[] = (string)$order->HAWBNumber;
+                $hawbItem = $xmlObj->getNode('HAWBUpdate');
+                foreach ($hawbItem as $order) {
+                    if ( $order->PINumber == $this::PINNUMBER1 || $order->PINumber == $this::PINNUMBER1) {
+                        $deliveredHawbNumbers[(string)$order->HAWBNumber] = $file;
+                    }
                 }
             }
         }
@@ -144,7 +145,7 @@ class Voga_DeliveredStatus_Model_Cron
         }
 
         if (!count($files)) {
-            Mage::log("No files in directory", null, 'delivered_status.log');
+            Mage::log("No files in directory", null, $this::DELIVERED_LOG);
             return ;
         }
 
@@ -168,30 +169,44 @@ class Voga_DeliveredStatus_Model_Cron
         }
     }
 
-    protected function _sendEmail($postObject)
+    protected function _sendEmail($postObject, $attachmentFile = null)
     {
-        $mailTemplate = Mage::getModel('core/email_template');
-        $mailTemplate->setDesignConfig(array('area' => 'frontend'))
-            ->sendTransactional(
-                Mage::getStoreConfig(self::EMAIL_TEMPLATE),
-                Mage::getStoreConfig(self::EMAIL_SENDER),
-                Mage::getStoreConfig(self::EMAIL_ADDRESS),
-                NULL,
-                array('data' => $postObject)
-            );
-
-        if (!$mailTemplate->getSentSuccess()) {
-            Mage::log("Email don't send", null, 'delivered_status.log');
+        $emailTemplate = Mage::getStoreConfig(self::EMAIL_TEMPLATE);
+        $emailSender = Mage::getStoreConfig(self::EMAIL_SENDER);
+        $emailAddress = Mage::getStoreConfig(self::EMAIL_ADDRESS);
+        if (!empty($emailTemplate) && !empty($emailSender) && !empty($emailAddress)) {
+            $mailTemplate = Mage::getModel('core/email_template');
+            if ($attachmentFile) {
+                $attachmentData = file_get_contents($attachmentFile);
+                $mailTemplate
+                    ->getMail()->createAttachment(
+                        $attachmentData,
+                        Zend_Mime::TYPE_OCTETSTREAM,
+                        Zend_Mime::DISPOSITION_ATTACHMENT,
+                        Zend_Mime::ENCODING_BASE64,
+                        basename($attachmentFile)
+                    );
+            }
+            $mailTemplate->setDesignConfig(array('area' => 'frontend'))
+                ->sendTransactional(
+                    $emailTemplate,
+                    $emailSender,
+                    $emailAddress,
+                    NULL,
+                    array('data' => $postObject)
+                );
+            if (!$mailTemplate->getSentSuccess()) {
+                Mage::log("Email don't send", null, $this::DELIVERED_LOG);
+            }
+        } else {
+            Mage::log("Email settings empty", null, $this::DELIVERED_LOG);
         }
-
     }
 
     protected function _diffHawbNumbers($deliveredHawbNumbers, $realHawbNumbers)
     {
-        $unrealHawbNumbers = array_diff($deliveredHawbNumbers, $realHawbNumbers);
-        foreach ($unrealHawbNumbers as $hawbNumber) {
-            Mage::log("Order with Hawb Number #{$hawbNumber} does not exist", null, 'delivered_status.log');
-        }
+        $unrealHawbNumbers = implode(', ', array_diff($deliveredHawbNumbers, $realHawbNumbers));
+        Mage::log("Order(s) with Hawb Number(s) #{$unrealHawbNumbers} does not exist", null, $this::DELIVERED_LOG);
     }
 
 }

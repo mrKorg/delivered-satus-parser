@@ -10,6 +10,11 @@
             <voga_deliveredstatus>
                 <class>Voga_DeliveredStatus_Model</class>
             </voga_deliveredstatus>
+            <sales>
+                <rewrite>
+                    <order>Voga_DeliveredStatus_Model_Sales_Order</order>
+                </rewrite>
+            </sales>
         </models>
         <resources>
             <voga_deliveredstatus_setup>
