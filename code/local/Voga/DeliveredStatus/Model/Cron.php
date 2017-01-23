@@ -9,36 +9,37 @@ class Voga_DeliveredStatus_Model_Cron
     const EMAIL_ADDRESS  = 'voga_deliveredstatus/deliveredstatus_group/email_address';
     const DELIVERED_LOG  = 'delivered_status.log';
 
-    protected $pathToXml;
-    protected $pathToXmlArchive;
+    protected $_pathToXml;
+    protected $_pathToXmlArchive;
 
     function __construct()
     {
-        $this->pathToXml        = Mage::getBaseDir('var') . DS .'aramex' . DS . 'raw_data' . DS;
-        $this->pathToXmlArchive = Mage::getBaseDir('var') . DS .'aramex' . DS . 'raw_data_archive' . DS;
-        $this->pathToXmlErrors = Mage::getBaseDir('var') . DS .'aramex' . DS . 'raw_data_errors' . DS;
+        $this->_pathToXml        = Mage::getBaseDir('var') . DS .'aramex' . DS . 'raw_data' . DS;
+        $this->_pathToXmlArchive = Mage::getBaseDir('var') . DS .'aramex' . DS . 'raw_data_archive' . DS;
     }
 
     protected function _getPathToXml($file = NULL)
     {
         if ($file) {
-            return $this->pathToXml . $file;
+            return $this->_pathToXml . $file;
         }
-        return $this->pathToXml;
+        return $this->_pathToXml;
     }
 
     protected function _getPathToXmlArchive()
     {
-        return $this->pathToXmlArchive;
+        return $this->_pathToXmlArchive;
     }
 
     public function parseXmlFiles()
     {
         $files = $this->_getAllXmlFiles();
-        $deliveredHawbNumbers = $this->_getDeliveredHawbNumbers($files);
-        $realHawbNumbers = $this->_setDeliveredStatus($deliveredHawbNumbers);
-        $this->_moveXmlFiles($files);
-        $this->_diffHawbNumbers(array_keys($deliveredHawbNumbers), $realHawbNumbers);
+        if (is_array($files)) {
+            $deliveredHawbNumbers = $this->_getDeliveredHawbNumbers($files);
+            $realHawbNumbers = $this->_setDeliveredStatus($deliveredHawbNumbers);
+            $this->_moveXmlFiles($files);
+            $this->_diffHawbNumbers(array_keys($deliveredHawbNumbers), $realHawbNumbers);
+        }
     }
 
     /**
@@ -70,15 +71,10 @@ class Voga_DeliveredStatus_Model_Cron
                         $comment = 'Order was set to Delivered by our automation tool.';
                         $order->addStatusHistoryComment($comment, false);
                         $order->save();
+                        $orderItems= $order->getAllVisibleItems();
 
-                        $orderItemsCollection = Mage::getResourceModel('sales/order_item_collection');
-                        $orderItemsCollection->addAttributeToSelect('item_id')
-                            ->addAttributeToSelect('order_id')
-                            ->addAttributeToSelect('supplier_order_status')
-                            ->addFieldToFilter('order_id', $order->getEntityId());
-
-                        foreach ($orderItemsCollection->getItems() as $item) {
-                            if ( $item->getSupplierOrderStatus() != 'Out of Stock' ) {
+                        foreach ($orderItems as $item) {
+                            if ( $item->getSupplierOrderStatus() != Voga_Warehouse_Helper_Data::ITEM_OUT_OF_STOCK_STATUS ) {
                                 $item->setSupplierOrderStatus(Voga_Warehouse_Helper_Data::ITEM_DELIVERED_STATUS);
                                 $item->save();
                             } else {
@@ -87,7 +83,7 @@ class Voga_DeliveredStatus_Model_Cron
                         }
                         Mage::log("Order #{$orderId} appointed status 'delivered'", null, $this::DELIVERED_LOG);
                     } else {
-                        throw new Exception("Order #{$orderId} hasn't state 'completed' or 'processing");
+                        throw new Exception("Order #{$orderId} hasn't state 'completed' or 'processing'");
                     }
                 } catch (Exception $e) {
                     $file = $this->_getPathToXml($deliveredHawbNumbers[$orderHuwNumber]);
@@ -130,23 +126,23 @@ class Voga_DeliveredStatus_Model_Cron
 
     /**
      * Get all xml files
-     * @return array
+     * @return array|NULL
      */
     protected function _getAllXmlFiles()
     {
         $path = $this->_getPathToXml();
         $files = scandir($path);
-        $patternFileName = '/^vogacloset_[0-9.]{0,}\.xml$/';
+        $patternFileName = '/^vogacloset_[0-9.]{0,}\.xml$/i';
 
         foreach ($files as $key => $file) {
-            if ( preg_match($patternFileName , strtolower($file)) == NULL ) {
+            if ( preg_match($patternFileName , $file) == NULL ) {
                 unset($files[$key]);
             }
         }
 
         if (!count($files)) {
             Mage::log("No files in directory", null, $this::DELIVERED_LOG);
-            return ;
+            return false;
         }
 
         return $files;
@@ -171,9 +167,9 @@ class Voga_DeliveredStatus_Model_Cron
 
     protected function _sendEmail($postObject, $attachmentFile = null)
     {
-        $emailTemplate = Mage::getStoreConfig(self::EMAIL_TEMPLATE);
-        $emailSender = Mage::getStoreConfig(self::EMAIL_SENDER);
-        $emailAddress = Mage::getStoreConfig(self::EMAIL_ADDRESS);
+        $emailTemplate = Mage::getStoreConfig($this::EMAIL_TEMPLATE); Zend_Debug::dump($emailTemplate);
+        $emailSender = Mage::getStoreConfig($this::EMAIL_SENDER); Zend_Debug::dump($emailSender);
+        $emailAddress = Mage::getStoreConfig($this::EMAIL_ADDRESS); Zend_Debug::dump($emailAddress);
         if (!empty($emailTemplate) && !empty($emailSender) && !empty($emailAddress)) {
             $mailTemplate = Mage::getModel('core/email_template');
             if ($attachmentFile) {
@@ -205,8 +201,10 @@ class Voga_DeliveredStatus_Model_Cron
 
     protected function _diffHawbNumbers($deliveredHawbNumbers, $realHawbNumbers)
     {
-        $unrealHawbNumbers = implode(', ', array_diff($deliveredHawbNumbers, $realHawbNumbers));
-        Mage::log("Order(s) with Hawb Number(s) #{$unrealHawbNumbers} does not exist", null, $this::DELIVERED_LOG);
+        $unrealHawbNumbers = array_diff($deliveredHawbNumbers, $realHawbNumbers);
+        if (count($unrealHawbNumbers)) {
+            Mage::log("Order(s) does not exist with Hawb Number(s) " . print_r($unrealHawbNumbers, true), null, $this::DELIVERED_LOG);
+        }
     }
 
 }

@@ -19,6 +19,8 @@ class Voga_DeliveredStatus_Model_Sales_Order extends Mage_Sales_Model_Order
      */
     protected function _setState($state, $status = false, $comment = '', $isCustomerNotified = null, $shouldProtectState = false)
     {
+        $_isStatusDelivered = false;
+
         // attempt to set the specified state
         if ($shouldProtectState) {
             if ($this->isStateProtected($state)) {
@@ -28,7 +30,7 @@ class Voga_DeliveredStatus_Model_Sales_Order extends Mage_Sales_Model_Order
             }
         }
 
-        if ($this->getStatus() == self::STATUS_DELIVERED && $this->getState() == Mage_Sales_Model_Order::STATE_PROCESSING
+        if ($this->getStatus() == $this::STATUS_DELIVERED && $this->getState() == Mage_Sales_Model_Order::STATE_PROCESSING
             && ($state == Mage_Sales_Model_Order::STATE_COMPLETE || $state == Mage_Sales_Model_Order::STATE_PROCESSING) )  {
             $_isStatusDelivered = true;
         }
@@ -39,8 +41,8 @@ class Voga_DeliveredStatus_Model_Sales_Order extends Mage_Sales_Model_Order
             if ($status === true) {
                 $status = $this->getConfig()->getStateDefaultStatus($state);
             }
-            if (isset($_isStatusDelivered)) {
-                $this->setStatus(self::STATUS_DELIVERED);
+            if ($_isStatusDelivered) {
+                $this->setStatus($this::STATUS_DELIVERED);
             } else {
                 $this->setStatus($status);
             }
