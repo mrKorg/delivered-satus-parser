@@ -7,6 +7,7 @@ class Voga_DeliveredStatus_Model_Cron
     const EMAIL_SENDER   = 'voga_deliveredstatus/deliveredstatus_group/email_field';
     const EMAIL_TEMPLATE = 'voga_deliveredstatus/deliveredstatus_group/email_template';
     const EMAIL_ADDRESS  = 'voga_deliveredstatus/deliveredstatus_group/email_address';
+    const EMAIL_COPY_TO  = 'voga_deliveredstatus/deliveredstatus_group/copy_to';
     const DELIVERED_LOG  = 'delivered_status.log';
 
     protected $_pathToXml;
@@ -67,8 +68,9 @@ class Voga_DeliveredStatus_Model_Cron
 
                 try {
                     if ( $order->getState() == Mage_Sales_Model_Order::STATE_COMPLETE || $order->getState() == Mage_Sales_Model_Order::STATE_PROCESSING ) {
+                        $order = $order->load($order->getId());
                         $order->setStatus( Voga_DeliveredStatus_Model_Sales_Order::STATUS_DELIVERED );
-                        $comment = 'Order was set to Delivered by our automation tool.';
+                        $comment = 'Order was set to Delivered.';
                         $order->addStatusHistoryComment($comment, false);
                         $order->save();
                         $orderItems= $order->getAllVisibleItems();
@@ -78,12 +80,13 @@ class Voga_DeliveredStatus_Model_Cron
                                 $item->setSupplierOrderStatus(Voga_Warehouse_Helper_Data::ITEM_DELIVERED_STATUS);
                                 $item->save();
                             } else {
-                                Mage::log("Order #{$orderId} has item with status 'Out of Stock'", null, $this::DELIVERED_LOG);
+                                Mage::log("Order #{$orderId} contains item with status 'Out of Stock'", null, $this::DELIVERED_LOG);
                             }
                         }
-                        Mage::log("Order #{$orderId} appointed status 'delivered'", null, $this::DELIVERED_LOG);
+                        Mage::log("Order #{$orderId} got status 'delivered'", null, $this::DELIVERED_LOG);
+                        throw new Exception("Order #{$orderId} doesn't have 'completed' or 'processing' statuses");
                     } else {
-                        throw new Exception("Order #{$orderId} hasn't state 'completed' or 'processing'");
+                        throw new Exception("Order #{$orderId} doesn't have 'completed' or 'processing' statuses");
                     }
                 } catch (Exception $e) {
                     $file = $this->_getPathToXml($deliveredHawbNumbers[$orderHuwNumber]);
@@ -167,9 +170,10 @@ class Voga_DeliveredStatus_Model_Cron
 
     protected function _sendEmail($postObject, $attachmentFile = null)
     {
-        $emailTemplate = Mage::getStoreConfig($this::EMAIL_TEMPLATE); Zend_Debug::dump($emailTemplate);
-        $emailSender = Mage::getStoreConfig($this::EMAIL_SENDER); Zend_Debug::dump($emailSender);
-        $emailAddress = Mage::getStoreConfig($this::EMAIL_ADDRESS); Zend_Debug::dump($emailAddress);
+        $emailTemplate = Mage::getStoreConfig($this::EMAIL_TEMPLATE);
+        $emailSender = Mage::getStoreConfig($this::EMAIL_SENDER);
+        $emailAddress = Mage::getStoreConfig($this::EMAIL_ADDRESS);
+        $emailCopyTo = Mage::getStoreConfig($this::EMAIL_COPY_TO);
         if (!empty($emailTemplate) && !empty($emailSender) && !empty($emailAddress)) {
             $mailTemplate = Mage::getModel('core/email_template');
             if ($attachmentFile) {
@@ -183,6 +187,9 @@ class Voga_DeliveredStatus_Model_Cron
                         basename($attachmentFile)
                     );
             }
+            if (!empty($emailCopyTo)) {
+                $mailTemplate->addBcc(explode(',', $emailCopyTo));
+            }
             $mailTemplate->setDesignConfig(array('area' => 'frontend'))
                 ->sendTransactional(
                     $emailTemplate,
@@ -192,10 +199,10 @@ class Voga_DeliveredStatus_Model_Cron
                     array('data' => $postObject)
                 );
             if (!$mailTemplate->getSentSuccess()) {
-                Mage::log("Email don't send", null, $this::DELIVERED_LOG);
+                Mage::log("Email wasn't sent", null, $this::DELIVERED_LOG);
             }
         } else {
-            Mage::log("Email settings empty", null, $this::DELIVERED_LOG);
+            Mage::log("Email settings are empty", null, $this::DELIVERED_LOG);
         }
     }
 
@@ -203,7 +210,7 @@ class Voga_DeliveredStatus_Model_Cron
     {
         $unrealHawbNumbers = array_diff($deliveredHawbNumbers, $realHawbNumbers);
         if (count($unrealHawbNumbers)) {
-            Mage::log("Order(s) does not exist with Hawb Number(s) " . print_r($unrealHawbNumbers, true), null, $this::DELIVERED_LOG);
+            Mage::log("Orders with Hawb Numbers don't exist " . print_r($unrealHawbNumbers, true), null, $this::DELIVERED_LOG);
         }
     }
 

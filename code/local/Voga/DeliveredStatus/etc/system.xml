@@ -43,6 +43,15 @@
                             <show_in_website>1</show_in_website>
                             <show_in_store>1</show_in_store>
                         </email_template>
+                        <copy_to translate="label comment">
+                            <label>Send Order Email Copy To</label>
+                            <frontend_type>text</frontend_type>
+                            <sort_order>40</sort_order>
+                            <show_in_default>1</show_in_default>
+                            <show_in_website>1</show_in_website>
+                            <show_in_store>1</show_in_store>
+                            <comment>Comma-separated.</comment>
+                        </copy_to>
                     </fields>
                 </deliveredstatus_group>
             </groups>
